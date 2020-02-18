@@ -11,9 +11,10 @@
 -use dummyVars caret libray to encode categorical variables
 
 ## Model selection:
+
 -Lasso with cross-validation (10 kfold) glmnet library
 
-Kaggle score: 0.12229
+### Kaggle score: 0.12229
 
 ## Data manipulation
 -perform a  linear regression over all data to detect outliers with function OutliersTest()
@@ -21,13 +22,18 @@ Kaggle score: 0.12229
 -Model selection
 -Lasso with cross-validation (10 kfold)  glmnet library
 
-Kaggle score: 0.11777
+### Kaggle score: 0.11777
 
 ## Data manipulation and Features engeneering
+
 -new feature: TotalFeet (TotalBsmtSF+X1stFlrSF+X2ndFlrSF)
 -new feature:  Grg binary variable to represent presence/absence
 -new features:  squared-root of the age of the garage and of the house
 -transform   numeric feature “OverallQual”  in to categorical
 
+## Model selection
 
+Stacked Lasso cross-validation (using function “replicate” (20 times) over cv.glmnet), to extract different lambda due to random partitions of data in cross-validation (like suggested by the library).  With  “n-lambda” we make a prediction and a new lasso regression to have the final price.
+
+### Kaggle score: 0.11411
 
