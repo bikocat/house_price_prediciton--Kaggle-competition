@@ -1,0 +1,363 @@
+---
+title: "Fds_final_project"
+author: "Catalano_Cirianni_Haxhillari"
+date: "03 luglio 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidyr)
+library(glmnet)
+library(readr)
+library(stringr)
+library(caret)
+library(car)
+require(methods)
+require(data.table)
+require(magrittr)
+library(matrixStats)
+library(dplyr)
+library(doParallel)
+library(caTools)
+
+
+```
+
+
+
+```{r}
+trainFull <- read.csv("train.csv", stringsAsFactors = F)
+testFull <- read.csv("test.csv")
+
+
+train <- trainFull 
+test<-testFull
+
+#select column less 90% missing values
+
+train<-train%>%select_if(colSums(is.na(train))/nrow(train)<=0.9)
+test<-test%>%select_if(colSums(is.na(test))/nrow(train)<=0.9)
+
+
+
+dim(train)
+
+dim(test)
+
+```
+
+```{r}
+#unisco train and test set per trasformare le variabili
+
+all_data <- rbind(select(train,MSSubClass:SaleCondition),
+                  select(test,MSSubClass:SaleCondition))
+
+
+dim(all_data)
+
+
+```
+
+
+```{r}
+#input missing values with 0 or None (presence/absence of feature)
+
+
+all_data$FireplaceQu[is.na(all_data$FireplaceQu)]<-"None"
+
+
+
+for (i in c('GarageType', 'GarageFinish', 'GarageQual', 'GarageCond')){
+ 
+ all_data[i][is.na(all_data[i])]<-"None"
+ 
+  }
+
+for (i in c('GarageYrBlt', 'GarageArea', 'GarageCars')){
+    all_data[i][is.na(all_data[i])]<-0
+}
+
+for (i in c('BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF','TotalBsmtSF', 'BsmtFullBath', 'BsmtHalfBath')){
+    all_data[i][is.na(all_data[i])]<-0
+}
+
+
+for (i in c('BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2')){
+    all_data[i][is.na(all_data[i])]<-0
+}
+
+all_data["MasVnrType"][is.na(all_data["MasVnrType"])]<-0
+all_data["MasVnrArea"][is.na(all_data["MasVnrArea"])]<-0
+all_data["Functional"][is.na(all_data["Functional"])]<-0
+all_data['KitchenQual'][is.na(all_data['KitchenQual'])]<-0
+all_data['MSSubClass'][is.na(all_data['MSSubClass'])]<-0
+all_data['Fence'][is.na(all_data['Fence'])]<-"None"
+
+
+#function Mode assign to NA the mode of the group
+
+
+Mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+all_data$MSZoning[is.na(all_data$MSZoning)]<-Mode(all_data$MSZoning)
+all_data$Electrical[is.na(all_data$Electrical)]<-Mode(all_data$Electrical)
+all_data$KitchenQual[is.na(all_data$KitchenQual)]<-Mode(all_data$KitchenQual)
+all_data$Exterior1st[is.na(all_data$Exterior1st)]<-Mode(all_data$Exterior1st)
+all_data$SaleType[is.na(all_data$SaleType)]<-Mode(all_data$SaleType)
+all_data$Functional[is.na(all_data$Functional)]<-Mode(all_data$Functional)
+all_data$Exterior2nd[is.na(all_data$Exterior2nd)]<-Mode(all_data$Exterior2nd)
+all_data$MSSubClass[is.na(all_data$MSSubClass)]<-Mode(all_data$MSSubClass)
+
+all_data$Utilities<- NULL
+
+```
+
+
+```{r}
+#new important features
+all_data$TotalFeet<-all_data$TotalBsmtSF+all_data$X1stFlrSF+all_data$X2ndFlrSF
+Grg<-as.logical(all_data$GarageYrBlt)
+all_data$Grg<-as.factor(Grg)
+
+
+#manipulation on year-features
+
+
+all_data$Age<-(2010-all_data$YearBuilt)**0.5
+
+
+all_data$GarageYrBlt[2593]<-2007  #we find an error Age 
+all_data$GarageAge<-(2010-all_data$GarageYrBlt)**0.5
+
+all_data$YearBuilt<-NULL
+all_data$GarageYrBlt<-NULL
+
+```
+
+```{r}
+#transform all characther features in categorical
+all_data <- mutate_if(all_data, is.character, as.factor)
+```
+
+```{r}
+#assign to LotFrontage NA the median by Neighborhood feature
+
+all_data <- all_data %>% group_by(Neighborhood) %>% mutate(LotFrontage = ifelse(is.na(LotFrontage), median(LotFrontage, na.rm = T),LotFrontage)) 
+
+```
+
+
+```{r}
+#transform numeric features in categorical
+#after some attempt to avoid overfitting we transform only OverallCond
+
+all_data$OverallQual<-as.factor(all_data$OverallQual)
+
+```
+
+
+```{r}
+#split categorical and nuemric features
+
+feature_classes <- sapply(names(all_data),function(x){class(all_data[[x]])})
+numeric_feats <-names(feature_classes[feature_classes != "factor"])
+categorical_feats <- names(feature_classes[feature_classes == "factor"])
+
+```
+
+
+```{r}
+
+#encoding categorical features with dummyvars from caret library
+
+dummies <- dummyVars(~.,all_data[categorical_feats])
+categorical_encoding <- predict(dummies,all_data[categorical_feats])
+categorical_encoding[is.na(categorical_encoding)] <- 0
+dim(all_data)
+dim(categorical_encoding)
+```
+
+
+```{r}
+#l<4
+#delete column from encoding with sum smaller than 4 
+
+l=apply(categorical_encoding,2,sum)
+l<-sort(l)
+n<-as.factor(names(l[l<4]))
+categorical_encoding<-subset(categorical_encoding,select = -c(n)) 
+
+dim(categorical_encoding)
+
+
+```
+
+
+```{r}
+
+#log-transfrom  for some important  skewed numeric features
+numeric_df <- all_data[numeric_feats]
+
+numeric_df$GrLivArea<-log(numeric_df$GrLivArea+1)
+numeric_df$X1stFlrSF<-log(numeric_df$X1stFlrSF+1)
+numeric_df$TotalBsmtSF<-log(numeric_df$TotalBsmtSF+1)
+numeric_df$LotArea<-log(numeric_df$LotArea+1)
+numeric_df$GarageArea<-log(numeric_df$GarageArea+1)
+numeric_df$LotFrontage<-log(numeric_df$LotFrontage+1)
+```
+
+
+```{r}
+# reaggregate numeric and categorical features
+
+all_data <- cbind(numeric_df,categorical_encoding)
+
+dim(all_data)
+```
+
+```{r}
+#split test e train
+
+X_train <- all_data[1:nrow(train),]
+X_test <- all_data[(nrow(train)+1):nrow(all_data),]
+train$SalePrice<-  log(train$SalePrice+1)
+```
+
+```{r}
+#add to train SalePrice column
+
+X_train$SalePrice<-train$SalePrice
+```
+
+```{r}
+# regressions to detect outliers in the  cimplete dataset  and in some specific important features
+
+fit=lm(SalePrice~., data=X_train)             
+f<-outlierTest(fit, cutoff=0.025,n.max=20)
+f
+
+fit2=lm(SalePrice~X_train$GrLivArea, data=X_train)
+f2<-outlierTest(fit2,cutoff = 0.025)
+f2
+
+```
+
+```{r}
+#remove outliers from dataset
+
+l_1<-c(as.integer(names(f[[1]])))
+l_2<-c(as.integer(names(f2[[1]])))
+
+l<-union(l_1,l_2)
+
+X_train<-X_train[-l,]
+```
+
+
+```{r}
+#bild data for lasso regression
+
+y <- X_train$SalePrice
+index_SalePrice<-grep("SalePrice", colnames(X_train))-1 
+x <- X_train[1:index_SalePrice] %>% data.matrix()
+x_test <- X_test %>%data.matrix()
+
+```
+
+
+```{r}
+
+#multiple lasso cross validation to get more values of lambda that can depends from specific random creation of nfolds as specified in cv.glmnet package
+
+n<-20
+N_cores<-detectCores()
+registerDoParallel(N_cores) #to allow parallelization
+system.time(cv_fit_lasso <- replicate(n,cv.glmnet(x, y, alpha = 1,nfolds=10,parallel = T)))
+stopImplicitCluster()
+
+
+
+#store different lambda in a vector
+Lambda_min_vec<-sapply(1:n,function(x) cv_fit_lasso[ ,x]$lambda.min)
+
+```
+
+```{r}
+
+
+Pred_Matrix<-matrix(NA,nrow(x),ncol=n)
+for (i in 1:n){
+  
+  Pred_Matrix[,i]<-predict(cv_fit_lasso[ ,i]$glmnet.fit, s = Lambda_min_vec[i] , newx = x)
+  
+}
+
+
+#regression over the Pred_Matrix 
+lasso_final <-  cv.glmnet(Pred_Matrix, y, alpha = 1)
+
+#save lambda
+(opt_lambda_lasso_vec <- lasso_final$lambda.min)
+lasso_final_fit <- lasso_final$glmnet.fit
+
+```
+
+
+```{r}
+#Prediction Matrix on Test
+
+Pred_Matrix_test<-matrix(NA,nrow(x_test),ncol=n)
+for (i in 1:n){
+  
+  Pred_Matrix_test[,i]<-predict(cv_fit_lasso[ ,i]$glmnet.fit, s = Lambda_min_vec[i] , newx = x_test)
+  
+}
+
+#Apply the previuos final fit in the previuous section on preditction Matrix to obtain the final predicit on test
+
+
+lasso_final <-  predict(lasso_final_fit, s=opt_lambda_lasso_vec, alpha = 1,newx =  Pred_Matrix_test)
+
+
+
+
+```
+
+```{r}
+#R squared and Rmse on train
+
+y_price_train <- predict(lasso_final_fit,s=opt_lambda_lasso_vec,  newx = Pred_Matrix)
+sst_20 <- sum(y^2)
+sse_20 <- sum((y_price_train - y)^2)
+
+# R squared
+rsq_20 <- 1 - sse_20 / sst_20
+rsq_20
+
+
+rmse_lasso<-mean((y_price_train-y)^2)**0.5
+rmse_lasso
+
+```
+
+```{r}
+#build dataframe to obtain csv
+
+Price_lasso<-exp(1)**(lasso_final)-1
+
+d.f<-data.frame(Id=testFull$Id)
+d.f$SalePrice<-Price_lasso[,1]
+write.csv(d.f, "pred.csv", row.names = FALSE)
+
+head(d.f)
+```
+
+
