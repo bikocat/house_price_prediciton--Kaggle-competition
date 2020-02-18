@@ -1,7 +1,7 @@
 ---
-title: "Fds_final_project"
-author: "Catalano_Cirianni_Haxhillari"
-date: "03 luglio 2018"
+title: "House Price Prediction"
+author: ""
+date: ""
 output: html_document
 ---
 
